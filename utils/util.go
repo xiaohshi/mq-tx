@@ -34,7 +34,7 @@ func GetConfigKey()(*models.ConfigKey, error){
 }
 
 // 获取rabbitMq的配置
-func GetRabbitMqConfig(configModel *models.ConfigKey)(*models.RabbitMqConfig, error){
+func GetRabbitMqModel(configModel *models.ConfigKey)(*models.RabbitMqModel, error){
 	data, ok := configModel.Def["rabbitmq"]
 	if !ok {
 		return nil, errors.New("获取不到rabbitMq配置")
@@ -53,7 +53,7 @@ func GetRabbitMqConfig(configModel *models.ConfigKey)(*models.RabbitMqConfig, er
 	if err != nil {
 		return nil, err
 	}
-	return &models.RabbitMqConfig{
+	return &models.RabbitMqModel{
 		Conn:    conn,
 		Channel: channel,
 		Queue:   queue,
@@ -61,7 +61,7 @@ func GetRabbitMqConfig(configModel *models.ConfigKey)(*models.RabbitMqConfig, er
 }
 
 // 获取mysql的配置
-func GetMysqlConfig(configModel *models.ConfigKey)(*gorm.DB, error) {
+func GetMysqlModel(configModel *models.ConfigKey)(*gorm.DB, error) {
 	data, ok := configModel.Def["mysql"]
 	if !ok {
 		return nil, errors.New("获取不到mysql配置")
@@ -72,7 +72,7 @@ func GetMysqlConfig(configModel *models.ConfigKey)(*gorm.DB, error) {
 }
 
 // 获取redis配置
-func GetRedisConfig(configModel *models.ConfigKey)(*redis.Client, error) {
+func GetRedisModel(configModel *models.ConfigKey)(*redis.Client, error) {
 	data, ok := configModel.Def["redis"]
 	if !ok {
 		return nil, errors.New("获取不到redis配置")
@@ -86,12 +86,12 @@ func GetRedisConfig(configModel *models.ConfigKey)(*redis.Client, error) {
 }
 
 // 关闭rabbitMq
-func CloseRabbitMq(mqConfig *models.RabbitMqConfig) {
-	if mqConfig == nil {
+func CloseRabbitMq(mqModel *models.RabbitMqModel) {
+	if mqModel == nil {
 		return
 	}
-	mqConfig.Conn.Close()
-	mqConfig.Channel.Close()
+	mqModel.Conn.Close()
+	mqModel.Channel.Close()
 }
 
 // 关闭mysql

@@ -6,13 +6,13 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/jinzhu/gorm"
-	"github.com/streadway/amqp"
 	"mq_tx/models"
+	"mq_tx/service"
 	"mq_tx/utils"
 	"strings"
 )
 
-var rabbitMqConfig *models.RabbitMqConfig
+var rabbitMqModel *models.RabbitMqModel
 var db *gorm.DB
 
 // 初始化函数
@@ -23,26 +23,26 @@ func init()  {
 		return
 	}
 
-	rabbitMqConfig, err = utils.GetRabbitMqConfig(configModel)
+	rabbitMqModel, err = utils.GetRabbitMqModel(configModel)
 	if err != nil {
 		utils.FailOnError(err, "失败初始化rabbitMq")
 		return
 	}
 
-	db, err = utils.GetMysqlConfig(configModel)
+	db, err = utils.GetMysqlModel(configModel)
 	if err != nil {
 		utils.FailOnError(err, "失败初始化mysql")
 	}
 }
 
 func main()  {
-	if rabbitMqConfig == nil || db == nil {
+	if rabbitMqModel == nil || db == nil {
 		fmt.Println("初始化配置文件出错")
 		return
 	}
 
 	defer utils.CLoseMysql(db)
-	defer utils.CloseRabbitMq(rabbitMqConfig)
+	defer utils.CloseRabbitMq(rabbitMqModel)
 
 	db.SingularTable(true)
 	// 执行本地事务
@@ -59,43 +59,21 @@ func main()  {
 	})
 	// 判断本地事务是否执行成功
 	if err != nil {
+		// 执行失败策略
 		utils.FailOnError(err, "本地事务执行失败")
 	}
 
-	// 本地事务执行成功，发送消息给rabbitmq
-	// 将这个通道设置为确认模式
-	channel := rabbitMqConfig.Channel
-	err = channel.Confirm(false)
-	utils.FailOnError(err, "Failed to set confirm mode")
-
-	// 确认消息是否发送成功
-	confirms := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
-	defer confirmMsg(confirms)
-
-	// 其中ID定义为事务的序列号，由uuid随机生成，body是需要发送的数据
+	// 其中ID定义为事务的版本号，由uuid随机生成，每一个事务只有一个版本号
+	// body是需要发送的数据
 	msg, err := json.Marshal(models.Message{
 		ID:   strings.Split(uuid.New().String(), "-")[0],
 		Body: &product,
 	})
-	utils.FailOnError(err, "Failed to publish a message")
+	utils.FailOnError(err, "Failed")
 
-	// 发送数据给rabbitMq
-	err = channel.Publish("", rabbitMqConfig.Queue.Name, false, false,
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        msg,
-		})
-	utils.FailOnError(err, "Failed to publish a message")
-}
-
-// 判断消息是否被推送成功
-func confirmMsg(confirms chan amqp.Confirmation)  {
-	confirmed := <-confirms
-	if confirmed.Ack {
-		// 成功的逻辑处理
-		fmt.Println("消息发送成功")
-	} else {
-		// 失败的逻辑处理
+	// 发送消息
+	err = service.PushMsg(rabbitMqModel, msg)
+	if err != nil {
 		fmt.Println("消息发送失败")
 	}
 }

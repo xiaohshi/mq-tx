@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var rabbitMqConfig *models.RabbitMqConfig
+var rabbitMqModel *models.RabbitMqModel
 var db *gorm.DB
 var rdb *redis.Client
 var ctx = context.Background()
@@ -26,31 +26,31 @@ func init()  {
 		return
 	}
 
-	rabbitMqConfig, err = utils.GetRabbitMqConfig(configModel)
+	rabbitMqModel, err = utils.GetRabbitMqModel(configModel)
 	if err != nil {
 		utils.FailOnError(err, "失败初始化rabbitMq")
 		return
 	}
 
-	db, err = utils.GetMysqlConfig(configModel)
+	db, err = utils.GetMysqlModel(configModel)
 	if err != nil {
 		utils.FailOnError(err, "失败初始化mysql")
 	}
 
-	rdb, err = utils.GetRedisConfig(configModel)
+	rdb, err = utils.GetRedisModel(configModel)
 	if err != nil {
 		utils.FailOnError(err, "失败初始化redis")
 	}
 }
 
 func main()  {
-	if rabbitMqConfig == nil || db == nil || rdb == nil {
+	if rabbitMqModel == nil || db == nil || rdb == nil {
 		fmt.Println("初始化配置文件出错")
 		return
 	}
 
 	defer utils.CLoseMysql(db)
-	defer utils.CloseRabbitMq(rabbitMqConfig)
+	defer utils.CloseRabbitMq(rabbitMqModel)
 	defer utils.CloseRedis(rdb)
 
 	db.SingularTable(true)
@@ -58,9 +58,10 @@ func main()  {
 
 	// 注册消费者
 	// 采用手动确认模式，这样自由度比较大
-	channel := rabbitMqConfig.Channel
-	msg, err := channel.Consume(rabbitMqConfig.Queue.Name, "", false,
+	channel := rabbitMqModel.Channel
+	msg, err := channel.Consume(rabbitMqModel.Queue.Name, "", false,
 		false, false, false, nil)
+	// 接收消息失败，需要重新拉取
 	utils.FailOnError(err, "Failed to register a consumer")
 
 	forever := make(chan bool)
@@ -102,7 +103,7 @@ func consumeMsg(msg <-chan amqp.Delivery) {
 			return nil
 		})
 		if err != nil {
-			// 可以执行重传消息的业务
+			// 已经收到了消息，进行事务补偿处理
 			fmt.Println("本地事务执行失败")
 			continue
 		}
@@ -114,6 +115,7 @@ func consumeMsg(msg <-chan amqp.Delivery) {
 		if err != nil {
 			// 这部分可以执行重试等策略
 			fmt.Println("消息确认失败")
+			continue
 		}
 		fmt.Println("消费者事务执行成功")
 	}
