@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-var rabbitMqModel *models.RabbitMqModel
+var rabbitMqModel *service.RabbitMqModel
 var db *gorm.DB
 
 // 初始化函数
@@ -23,13 +23,13 @@ func init()  {
 		return
 	}
 
-	rabbitMqModel, err = utils.GetRabbitMqModel(configModel)
+	rabbitMqModel, err = configModel.GetRabbitMqModel()
 	if err != nil {
 		utils.FailOnError(err, "失败初始化rabbitMq")
 		return
 	}
 
-	db, err = utils.GetMysqlModel(configModel)
+	db, err = configModel.GetMysqlModel()
 	if err != nil {
 		utils.FailOnError(err, "失败初始化mysql")
 	}
@@ -42,12 +42,27 @@ func main()  {
 	}
 
 	defer utils.CLoseMysql(db)
-	defer utils.CloseRabbitMq(rabbitMqModel)
+	defer rabbitMqModel.Close()
 
-	db.SingularTable(true)
-	// 执行本地事务
+	db.AutoMigrate(&models.Product{})
+
+	// 将这个channel设置为确认模式
+	// 放在事务之前设置，如果设置失败整个事务就不会执行
+	err := rabbitMqModel.Channel.Confirm(false)
+	utils.FailOnError(err, "Failed to set confirm mode")
+
+	// 其中ID定义为事务的版本号，由uuid随机生成，每一个事务只有一个版本号
+	// body是需要发送的数据
 	product := models.Product{Code: "1111", Price: 1000}
-	err := db.Transaction(func(tx *gorm.DB) error {
+	msg, err := json.Marshal(models.Message{
+		ID:   strings.Split(uuid.New().String(), "-")[0],
+		Body: &product,
+	})
+	utils.FailOnError(err, "Failed")
+
+	// 保证所有异常尽可能都在事务执行之前被发现，保证后续的失败不是程序原因导致
+	// 执行本地事务
+	err = db.Transaction(func(tx *gorm.DB) error {
 		// 插入一行
 		err := tx.Create(&product).Error
 		if err != nil {
@@ -63,17 +78,10 @@ func main()  {
 		utils.FailOnError(err, "本地事务执行失败")
 	}
 
-	// 其中ID定义为事务的版本号，由uuid随机生成，每一个事务只有一个版本号
-	// body是需要发送的数据
-	msg, err := json.Marshal(models.Message{
-		ID:   strings.Split(uuid.New().String(), "-")[0],
-		Body: &product,
-	})
-	utils.FailOnError(err, "Failed")
-
 	// 发送消息
-	err = service.PushMsg(rabbitMqModel, msg)
-	if err != nil {
+	err, ok := rabbitMqModel.PushMsg(msg)
+	if err != nil || !ok {
+		// 执行消息发送失败的策略，可以执行回滚操作，将原操作反向执行一次
 		fmt.Println("消息发送失败")
 	}
 }
