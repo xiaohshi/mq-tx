@@ -87,13 +87,9 @@ func (mqModel *RabbitMqModel)ConsumeMsg(msg <-chan amqp.Delivery, rdb *redis.Cli
 			_ = d.Reject(false)
 			continue
 		}
-		err = execLocalTx(message, db)
-		if err != nil {
-			// 已经收到了消息，但是事务执行失败了
-			fmt.Println("本地事务执行失败")
-			// 启动一个协程执行事务补偿机制
-			go compensateTx(message, db)
-		}
+		// 启动一个协程执行事务
+		// 能进行到这一步，说明已经接受到消息
+		go execLocalTx(message, db)
 		// 手动确认
 		// 本地事务无论是否执行成功都会确认，保证消息不会堆积
 		err = d.Ack(false)
@@ -131,28 +127,35 @@ func compensateTx(msg *models.Message, db *gorm.DB)  {
 	//	State: false,
 	//}
 	//db.Create(&localMsg)
-	ticker := time.NewTicker(time.Second * 30)
-	for range ticker.C {
-		err := execLocalTx(msg, db)
-		if err == nil {
-			//db.Model(&localMsg).Update("state", true)
-			return
-		}
-	}
+	//ticker := time.NewTicker(time.Second * 30)
+	//for range ticker.C {
+	//	err := execLocalTx(msg, db)
+	//	if err == nil {
+	//		//db.Model(&localMsg).Update("state", true)
+	//		return
+	//	}
+	//}
 }
 
 // 消费者执行本地事务
-func execLocalTx(msg *models.Message, db *gorm.DB) error {
-	return db.Transaction(func(tx *gorm.DB) error {
-		// 本地事务的业务逻辑
-		err := db.Create(&models.Admin{
-			Name:    "test",
-			Product: msg.Body.Code,
-			Address: "sz",
-		}).Error
-		if err != nil {
-			return err
+func execLocalTx(msg *models.Message, db *gorm.DB) {
+	for {
+		err := db.Transaction(func(tx *gorm.DB) error {
+			// 本地事务的业务逻辑
+			err := db.Create(&models.Admin{
+				Name:    "test",
+				Product: msg.Body.Code,
+				Address: "sz",
+			}).Error
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+		if err == nil {
+			return
 		}
-		return nil
-	})
+		// 已经收到了消息，但是事务执行失败了
+		fmt.Println("本地事务执行失败, 重试中")
+	}
 }
