@@ -53,7 +53,5 @@
 
 ### Used
 gorm
-
 go-redis
-
 rabbitMq
