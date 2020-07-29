@@ -20,7 +20,7 @@ type RabbitMqModel struct {
 }
 
 // 推送消息
-// 重试超过10次，就直接返回
+// 重试超过5次，就直接返回
 func (mqModel *RabbitMqModel)PushMsg(msg []byte) (error, bool) {
 	retryCount := 0
 	confirms := mqModel.Channel.NotifyPublish(make(chan amqp.Confirmation, 1))
@@ -29,7 +29,7 @@ func (mqModel *RabbitMqModel)PushMsg(msg []byte) (error, bool) {
 		err, ok := mqModel.push(confirms, msg)
 		if err != nil || !ok {
 			retryCount ++
-			if retryCount < 10 {
+			if retryCount < 5 {
 				continue
 			} else {
 				return err, false
@@ -59,9 +59,10 @@ func (mqModel *RabbitMqModel)push(confirms chan amqp.Confirmation, msg []byte)(e
 	select {
 	case confirmed := <-confirms:
 		if confirmed.Ack {
+
 			return nil, true
 		} else {
-			// 在吞吐量过大的时候，rabbit可能会拒绝消息，此时需要回滚事务
+			// 在吞吐量过大的时候，rabbit可能会拒绝消息，重试
 			return nil, false
 		}
 	case <-time.After(time.Minute):
@@ -85,7 +86,7 @@ func (mqModel *RabbitMqModel)ConsumeMsg(msg <-chan amqp.Delivery, rdb *redis.Cli
 			continue
 		}
 		// 利用redis进行幂等运算，保证不会重复消费数据
-		if !rdb.SetNX(ctx, message.ID, "true", time.Hour).Val() {
+		if rdb.Get(ctx, message.ID).Val() != "" {
 			// 相关逻辑处理
 			fmt.Println("该消息已经消费过啦")
 			// 通知rabbitMq删除该消息
@@ -95,6 +96,8 @@ func (mqModel *RabbitMqModel)ConsumeMsg(msg <-chan amqp.Delivery, rdb *redis.Cli
 		// 启动一个协程执行事务
 		// 能进行到这一步，说明已经接受到消息
 		go execLocalTx(message, db)
+		// 将事务ID存入redis
+		rdb.SetNX(ctx, message.ID, "true", time.Hour)
 		// 手动确认
 		// 本地事务无论是否执行成功都会确认，保证消息不会堆积
 		err = d.Ack(false)

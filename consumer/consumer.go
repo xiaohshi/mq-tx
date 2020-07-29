@@ -50,7 +50,6 @@ func main()  {
 	defer utils.CloseRedis(rdb)
 
 	db.AutoMigrate(&models.Admin{})
-	db.AutoMigrate(&models.LocalMsg{})
 
 	// 注册消费者, 采用手动确认模式
 	msg, err := rabbitMqModel.Channel.Consume(rabbitMqModel.Queue.Name, "", false,

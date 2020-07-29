@@ -13,8 +13,9 @@ type Admin struct {
 	Address string
 }
 
-// 定义本地消息表用于补偿事务
+// 定义本地消息表
 type LocalMsg struct {
-	ID    string
-	State bool
+	ID      string
+	Message string
+	State   bool
 }

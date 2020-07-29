@@ -51,11 +51,16 @@ func main()  {
 	err := rabbitMqModel.Channel.Confirm(false)
 	utils.FailOnError(err, "Failed to set confirm mode")
 
-	// 其中ID定义为事务的版本号，由uuid随机生成，每一个事务只有一个版本号
+	// 其中ID定义为事务的版本号，由uuid随机生成
+	// 每一个事务都有一个唯一的版本号
 	// body是需要发送的数据
-	product := models.Product{Code: "1111", Price: 1000}
+	product := models.Product{
+		Code: "1111",
+		Price: 1000,
+	}
+	txID := strings.Split(uuid.New().String(), "-")[0]
 	msg, err := json.Marshal(models.Message{
-		ID:   strings.Split(uuid.New().String(), "-")[0],
+		ID:   txID,
 		Body: &product,
 	})
 	utils.FailOnError(err, "Failed")
