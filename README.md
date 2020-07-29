@@ -52,6 +52,6 @@
 2、在生产者发送消息的时候消息发送失败该如何处理，事务需不需要回滚操作
 
 ### Used
-gorm
-go-redis
+gorm/
+go-redis/t
 rabbitMq
