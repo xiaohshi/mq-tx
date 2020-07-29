@@ -70,6 +70,8 @@ func (mqModel *RabbitMqModel)push(confirms chan amqp.Confirmation, msg []byte)(e
 }
 
 // 消费消息
+// 事务执行和确认分开执行，事务执行失败会不断重试直至成功
+// 在考虑是否应该将消息存入本地的消息表中
 func (mqModel *RabbitMqModel)ConsumeMsg(msg <-chan amqp.Delivery, rdb *redis.Client, db *gorm.DB) {
 	var ctx = context.Background()
 	for d := range msg {
@@ -77,6 +79,9 @@ func (mqModel *RabbitMqModel)ConsumeMsg(msg <-chan amqp.Delivery, rdb *redis.Cli
 		message := new(models.Message)
 		err := json.Unmarshal(d.Body, &message)
 		if err != nil {
+			fmt.Println("该消息可能有错误，删除")
+			// 通知rabbitMq删除该消息
+			_ = d.Reject(false)
 			continue
 		}
 		// 利用redis进行幂等运算，保证不会重复消费数据
