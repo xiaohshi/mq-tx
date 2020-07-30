@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var ctx = context.Background()
+
 type RabbitMqModel struct {
 	Conn 	*amqp.Connection
 
@@ -74,7 +76,6 @@ func (mqModel *RabbitMqModel)push(confirms chan amqp.Confirmation, msg []byte)(e
 // 事务执行和确认分开执行，事务执行失败会不断重试直至成功
 // 在考虑是否应该将消息存入本地的消息表中
 func (mqModel *RabbitMqModel)ConsumeMsg(msg <-chan amqp.Delivery, rdb *redis.Client, db *gorm.DB) {
-	var ctx = context.Background()
 	for d := range msg {
 		fmt.Println(string(d.Body))
 		message := new(models.Message)
@@ -85,29 +86,7 @@ func (mqModel *RabbitMqModel)ConsumeMsg(msg <-chan amqp.Delivery, rdb *redis.Cli
 			_ = d.Reject(false)
 			continue
 		}
-		// 利用redis进行幂等运算，保证不会重复消费数据
-		if rdb.Get(ctx, message.ID).Val() != "" {
-			// 相关逻辑处理
-			fmt.Println("该消息已经消费过啦")
-			// 通知rabbitMq删除该消息
-			_ = d.Reject(false)
-			continue
-		}
-		// 启动一个协程执行事务
-		// 能进行到这一步，说明已经接受到消息
-		go execLocalTx(message, db)
-		// 将事务ID存入redis
-		rdb.SetNX(ctx, message.ID, "true", time.Hour)
-		// 手动确认
-		// 本地事务无论是否执行成功都会确认，保证消息不会堆积
-		err = d.Ack(false)
-		// 确认失败
-		if err != nil {
-			fmt.Println("消息确认失败")
-			// 重新发送未确认的消息，有幂等保证
-			_ = mqModel.Channel.Recover(true)
-		}
-		fmt.Println("消费者事务执行成功")
+		go mqModel.handle(d, rdb, db, message)
 	}
 }
 
@@ -116,33 +95,71 @@ func (mqModel *RabbitMqModel)Close() {
 	if mqModel == nil {
 		return
 	}
-	err := mqModel.Conn.Close()
-	if err != nil {
-		fmt.Println("连接关闭失败")
-	}
-	err = mqModel.Channel.Close()
+	err := mqModel.Channel.Close()
 	if err != nil {
 		fmt.Println("通道关闭失败")
 	}
+	err = mqModel.Conn.Close()
+	if err != nil {
+		fmt.Println("连接关闭失败")
+	}
+
+}
+
+func (mqModel *RabbitMqModel)handle(d amqp.Delivery, rdb *redis.Client, db *gorm.DB, msg *models.Message)  {
+	// 利用redis进行幂等运算，保证不会重复消费数据
+	if rdb.Get(ctx, msg.ID).Val() != "" {
+		// 相关逻辑处理
+		fmt.Println("该消息已经消费过啦")
+		// 通知rabbitMq删除该消息
+		_ = d.Reject(false)
+		return
+	}
+	tx := db.Begin()
+	// 本地事务的业务逻辑
+	err := db.Create(&models.Admin{
+		Name:    "test",
+		Product: msg.Body.Code,
+		Address: "sz",
+	}).Error
+	if err != nil {
+		fmt.Println("事务执行失败，回滚")
+		tx.Rollback()
+		return
+	}
+	// 手动确认消息
+	err = d.Ack(false)
+	// 确认失败
+	if err != nil {
+		fmt.Println("消息确认失败")
+		tx.Rollback()
+		// 重新发送未确认的消息，有幂等保证
+		_ = mqModel.Channel.Recover(true)
+		return
+	}
+	tx.Commit()
+	fmt.Println("消费者事务执行成功")
+	// 将事务ID存入redis, 1小时后删除
+	rdb.SetNX(ctx, msg.ID, "true", time.Hour)
 }
 
 // 事务补偿
 // 进入死循环，确保事务一定要执行成功
 // 利用事务版本号来判断事务是否被成功执行
 func compensateTx(msg *models.Message, db *gorm.DB)  {
-	//localMsg := models.LocalMsg{
-	//	ID:    msg.ID,
-	//	State: false,
-	//}
-	//db.Create(&localMsg)
-	//ticker := time.NewTicker(time.Second * 30)
-	//for range ticker.C {
-	//	err := execLocalTx(msg, db)
-	//	if err == nil {
-	//		//db.Model(&localMsg).Update("state", true)
-	//		return
-	//	}
-	//}
+	localMsg := models.LocalMsg{
+		ID:    msg.ID,
+		State: false,
+	}
+	db.Create(&localMsg)
+	ticker := time.NewTicker(time.Second * 30)
+	for range ticker.C {
+		//execLocalTx(msg, db)
+		//if err == nil {
+		//	//db.Model(&localMsg).Update("state", true)
+		//	return
+		//}
+	}
 }
 
 // 消费者执行本地事务
