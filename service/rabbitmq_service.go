@@ -106,6 +106,7 @@ func (mqModel *RabbitMqModel)Close() {
 
 }
 
+// 本地事务处理
 func (mqModel *RabbitMqModel)handle(d amqp.Delivery, rdb *redis.Client, db *gorm.DB, msg *models.Message)  {
 	// 利用redis进行幂等运算，保证不会重复消费数据
 	if rdb.Get(ctx, msg.ID).Val() != "" {
@@ -115,32 +116,34 @@ func (mqModel *RabbitMqModel)handle(d amqp.Delivery, rdb *redis.Client, db *gorm
 		_ = d.Reject(false)
 		return
 	}
-	tx := db.Begin()
-	// 本地事务的业务逻辑
-	err := db.Create(&models.Admin{
-		Name:    "test",
-		Product: msg.Body.Code,
-		Address: "sz",
-	}).Error
+	err := db.Transaction(func(tx *gorm.DB) error {
+		// 本地事务的业务逻辑
+		err := db.Create(&models.Admin{
+			Name:    "test",
+			Product: msg.Body.Code,
+			Address: "sz",
+		}).Error
+		if err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		fmt.Println("事务执行失败，回滚")
-		tx.Rollback()
-		return
+		fmt.Println("事务消费失败")
 	}
+	// 将事务ID存入redis, 1小时后删除
+	rdb.SetNX(ctx, msg.ID, "true", time.Hour)
+
 	// 手动确认消息
 	err = d.Ack(false)
 	// 确认失败
 	if err != nil {
 		fmt.Println("消息确认失败")
-		tx.Rollback()
 		// 重新发送未确认的消息，有幂等保证
 		_ = mqModel.Channel.Recover(true)
 		return
 	}
-	tx.Commit()
 	fmt.Println("消费者事务执行成功")
-	// 将事务ID存入redis, 1小时后删除
-	rdb.SetNX(ctx, msg.ID, "true", time.Hour)
 }
 
 // 事务补偿
