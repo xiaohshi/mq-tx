@@ -14,6 +14,7 @@ type Admin struct {
 }
 
 // 定义本地消息表
+// false：没有发送 true：未发送
 type LocalMsg struct {
 	ID      string
 	Message string

@@ -54,20 +54,24 @@ func (mqModel *RabbitMqModel)push(confirms chan amqp.Confirmation, msg []byte)(e
 		})
 	// 如果发送失败返回
 	if err != nil {
+		fmt.Println("发送失败，重试")
 		return err, false
 	}
 	// 利用select的特性
 	// 一分钟之内没有收到确认消息就返回
+	// 时间不能设置太短，不然会出现一致性问题
 	select {
 	case confirmed := <-confirms:
 		if confirmed.Ack {
-
 			return nil, true
 		} else {
+			fmt.Println("消息被拒绝，重试")
 			// 在吞吐量过大的时候，rabbit可能会拒绝消息，重试
+			// 可能需要在该过程中执行一些相关策略，不一定是重试
 			return nil, false
 		}
-	case <-time.After(time.Minute):
+	case <-time.After(time.Second * 10):
+		fmt.Println("确认失败，重试")
 		return nil, false
 	}
 }
@@ -130,6 +134,9 @@ func (mqModel *RabbitMqModel)handle(d amqp.Delivery, rdb *redis.Client, db *gorm
 	})
 	if err != nil {
 		fmt.Println("事务消费失败")
+		// 重试
+		_ = mqModel.Channel.Recover(true)
+		return
 	}
 	// 将事务ID存入redis, 1小时后删除
 	rdb.SetNX(ctx, msg.ID, "true", time.Hour)

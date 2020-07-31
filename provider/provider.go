@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
@@ -67,12 +68,20 @@ func main()  {
 
 	// 保证所有异常尽可能都在事务执行之前被发现，保证后续的失败不是程序原因导致
 	// 执行本地事务
+	// 将事务和发送消息放在同一个事务中执行
 	err = db.Transaction(func(tx *gorm.DB) error {
 		// 插入一行
 		err := tx.Create(&product).Error
 		if err != nil {
 			// 返回任意 err ，整个事务都会 rollback
 			return err
+		}
+		// 发送消息
+		err, ok := rabbitMqModel.PushMsg(msg)
+		// 消息发送失败
+		if err != nil || !ok {
+			// 执行消息发送失败的策略，可以执行回滚操作，将原操作反向执行一次
+			return errors.New("消息发送失败")
 		}
 		// 返回 nil ，事务会 commit
 		return nil
@@ -81,12 +90,5 @@ func main()  {
 	if err != nil {
 		// 执行失败策略
 		utils.FailOnError(err, "本地事务执行失败")
-	}
-
-	// 发送消息
-	err, ok := rabbitMqModel.PushMsg(msg)
-	if err != nil || !ok {
-		// 执行消息发送失败的策略，可以执行回滚操作，将原操作反向执行一次
-		fmt.Println("消息发送失败")
 	}
 }
